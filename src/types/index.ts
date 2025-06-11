@@ -62,6 +62,7 @@ export interface LevelAnalysis {
 
 export interface Config {
     exchange: {
+        type: 'binance' | 'mexc';
         apiKey: string;
         apiSecret: string;
         testnet: boolean;
@@ -121,18 +122,6 @@ export interface ExitConditions {
     reason?: 'stopLoss' | 'takeProfit' | 'manual';
 }
 
-
-
-export interface Exchange {
-    loadMarkets(): Promise<any>;
-    fetchTicker(symbol: string): Promise<{ last: number }>;
-    fetchOHLCV(
-        symbol: string,
-        timeframe?: string,
-        since?: number,
-        limit?: number
-    ): Promise<number[][]>;
-}
-
+import type { Exchange, Order, OrderParams } from './exchange.js';
 
 export type WebSocketMessage = WebSocketTradeMessage;

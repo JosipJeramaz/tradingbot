@@ -33,6 +33,8 @@ declare module 'ccxt' {
         async fapiPrivate_post_leverage(params: any): Promise<any>;
     }
 
+    export class mexc extends Exchange {}
+
     export interface Order {
         id: string;
         price: number;

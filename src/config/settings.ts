@@ -7,12 +7,13 @@ dotenv.config();
 
 export const config: Config = {
     exchange: {
+        type: (process.env.EXCHANGE_TYPE as 'binance' | 'mexc') || 'binance',
         apiKey: process.env.API_KEY || '',
         apiSecret: process.env.API_SECRET || '',
         testnet: process.env.USE_TESTNET === 'true'
     },
     trading: {
-        symbol: 'BTC/USDT',
+        symbol: 'BTC/USDC',
         leverage: TRADING_CONSTANTS.LEVERAGE,
         initialStake: TRADING_CONSTANTS.INITIAL_STAKE_PERCENTAGE
     },

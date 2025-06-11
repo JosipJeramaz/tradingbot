@@ -9,9 +9,10 @@
     "test": "jest"
   },
   "dependencies": {
-    "ccxt": "^4.0.0",
+    "ccxt": "^4.4.86",
     "dotenv": "^16.0.0",
     "luxon": "^3.0.0",
+    "node-fetch": "^3.3.2",
     "winston": "^3.8.0",
     "ws": "^8.0.0"
   },

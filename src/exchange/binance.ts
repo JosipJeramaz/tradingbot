@@ -1,5 +1,7 @@
 // src/exchange/binance.ts
-import ccxt from 'ccxt';
+// @ts-ignore
+import ccxtImport from 'ccxt';
+const ccxt: any = ccxtImport;
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import { fixedNumber } from '../core/utils.js';
@@ -7,7 +9,7 @@ import type { Config } from '../types/index.js';
 import type { Exchange, OrderParams, Order } from '../types/exchange.js';
 
 export class BinanceConnector implements Exchange {
-    private readonly exchange: ccxt.binance;
+    private readonly exchange: any;
     private readonly wsEmitter: EventEmitter;
     private readonly maxReconnectAttempts: number = 5;
     private ws: WebSocket | null;
@@ -16,7 +18,7 @@ export class BinanceConnector implements Exchange {
     private markets: Record<string, any>;
 
     constructor(config: Config['exchange']) {
-        this.exchange = new ccxt.binance({
+        this.exchange = new ccxt['binanceusdm']({
             apiKey: config.apiKey,
             secret: config.apiSecret,
             options: { 
@@ -40,6 +42,7 @@ export class BinanceConnector implements Exchange {
     }
 
     public async fetchTicker(symbol: string): Promise<{ last: number }> {
+        // Use futures ticker
         const ticker = await this.exchange.fetchTicker(symbol);
         return {
             last: Number(ticker.last)
@@ -52,6 +55,7 @@ export class BinanceConnector implements Exchange {
         since?: number,
         limit?: number
     ): Promise<number[][]> {
+        // This will now use futures endpoint due to defaultType
         return await this.exchange.fetchOHLCV(symbol, timeframe, since, limit);
     }
 

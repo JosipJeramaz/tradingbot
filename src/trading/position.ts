@@ -7,31 +7,36 @@ import type {
     TradeResult,
     LevelAnalysis 
 } from '../types/index.js';
-import { BinanceConnector } from '../exchange/binance.js';
+import type { Exchange, OrderParams } from '../types/exchange.js';
 import { TradingStateManager } from './state.js';
+import { setupLogger } from '../core/logger.js';
 
 export class PositionManager {
-    private readonly exchange: BinanceConnector;
+    private readonly exchange: Exchange;
     private readonly state: TradingStateManager;
     private readonly LEVERAGE: number = 20;
     private readonly MIN_DISTANCE: number = 0.001;
     private readonly symbol: string; // Add this
+    private readonly logger = setupLogger('info');
 
-    constructor(exchange: BinanceConnector, state: TradingStateManager, symbol: string) { // Add symbol parameter
+    constructor(exchange: Exchange, state: TradingStateManager, symbol: string) { // Add symbol parameter
         this.exchange = exchange;
         this.state = state;
         this.symbol = symbol;
+        this.logger.info(`PositionManager initialized for symbol: ${symbol}`);
     }
 
     public async openPosition(entry: EntrySignal): Promise<Position> {
-        const order = await this.exchange.createOrder(
-            this.symbol,
-            'MARKET',
-            entry.type === 'LONG' ? 'BUY' : 'SELL',
-            entry.size,
-            undefined,
-            { leverage: this.LEVERAGE }
-        );
+        this.logger.info(`Opening position: ${JSON.stringify(entry)}`);
+        const orderParams: OrderParams = {
+            type: 'MARKET',
+            side: entry.type === 'LONG' ? 'BUY' : 'SELL',
+            amount: entry.size,
+            leverage: this.LEVERAGE,
+            symbol: this.symbol
+        };
+
+        const order = await this.exchange.createOrder(orderParams);
 
         const position: Position = {
             type: entry.type,
@@ -45,20 +50,24 @@ export class PositionManager {
             updates: []
         };
 
+        this.logger.info(`Position opened: ${JSON.stringify(position)}`);
         return position;
     }
 
     public async closePosition(position: Position, reason: 'stopLoss' | 'takeProfit' | 'manual'): Promise<TradeResult> {
-        const closeOrder = await this.exchange.createOrder(
-            this.symbol,
-            'MARKET',
-            position.type === 'LONG' ? 'SELL' : 'BUY',
-            position.size
-        );
-
+        this.logger.info(`Closing position: ${JSON.stringify(position)} Reason: ${reason}`);
+        const closeOrderParams: OrderParams = {
+            symbol: this.symbol,
+            type: 'MARKET',
+            side: position.type === 'LONG' ? 'SELL' : 'BUY',
+            amount: position.size
+        };
+    
+        const closeOrder = await this.exchange.createOrder(closeOrderParams);
         const exitPrice = fixedNumber(closeOrder.price);
         const pnl = this.calculatePnL(position, exitPrice);
-
+    
+        this.logger.info(`Position closed at price ${exitPrice}, PnL: ${pnl}`);
         return {
             position,
             exitPrice,
@@ -70,6 +79,7 @@ export class PositionManager {
     }
 
     public checkEntryConditions(price: number, levels: LevelAnalysis | null): EntrySignal | null {
+        this.logger.debug(`Checking entry conditions for price: ${price}`);
         if (!levels) return null;
         const { holdLevels, resistanceLevels } = levels;
         
@@ -106,6 +116,7 @@ export class PositionManager {
         shouldClose: boolean; 
         reason?: 'stopLoss' | 'takeProfit' 
     } {
+        this.logger.debug(`Checking exit conditions for position at price: ${currentPrice}`);
         const { type, stopLoss, takeProfit } = position;
         
         if (type === 'LONG') {
@@ -128,6 +139,7 @@ export class PositionManager {
     }
 
     public calculateTrailingStop(position: Position, currentPrice: number): number {
+        this.logger.debug(`Calculating trailing stop for position at price: ${currentPrice}`);
         const { type, entryPrice } = position;
         const stopDistance = 0.1; // 10%
 
@@ -153,6 +165,7 @@ export class PositionManager {
 
         position.stopLoss = newStop;
         await this.state.setCurrentPosition(position);
+        this.logger.info(`Stop loss updated to: ${newStop}`);
     }
 
     private calculateInitialStop(type: 'LONG' | 'SHORT', entryPrice: number): number {

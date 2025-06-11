@@ -12,7 +12,10 @@ import { TradingStateManager } from './state.js';
 import { PositionManager } from './position.js';
 import { RiskManager } from './risk.js';
 import { BinanceConnector } from '../exchange/binance.js';
+import { MEXCConnector } from '../exchange/mexc.js';
+import type { Exchange } from '../types/exchange.js';
 import { LevelAnalyzer } from '../core/levelAnalysis.js';
+import { setupLogger } from '../core/logger.js'; // <-- Add this if you use a logger utility
 
 interface TradingEngineEvents {
     started: () => void;
@@ -26,29 +29,33 @@ interface TradingEngineEvents {
 
 export class TradingEngine extends EventEmitter {
     private readonly state: TradingStateManager;
-    private readonly exchange: BinanceConnector;
+    private readonly exchange: Exchange;
     private readonly positionManager: PositionManager;
     private readonly riskManager: RiskManager;
     private readonly levelAnalyzer: LevelAnalyzer;
     private readonly symbol: string;
     private readonly levelUpdateInterval: number;
-    
+    private readonly logger: ReturnType<typeof setupLogger>;
+
     private isRunning: boolean;
     private lastLevelUpdate: DateTime | null;
 
     constructor(config: Config) {
         super();
-        this.exchange = new BinanceConnector(config.exchange);
+        this.exchange = config.exchange.type === 'mexc' 
+            ? new MEXCConnector(config.exchange)
+            : new BinanceConnector(config.exchange);
         this.state = new TradingStateManager();
         this.symbol = config.trading.symbol;
-        this.positionManager = new PositionManager(this.exchange, this.state, this.symbol); // Pass symbol
+        this.positionManager = new PositionManager(this.exchange, this.state, this.symbol);
         this.riskManager = new RiskManager(config.risk);
         this.levelAnalyzer = new LevelAnalyzer(this.exchange);
-        
-        this.symbol = config.trading.symbol;
+
         this.isRunning = false;
         this.lastLevelUpdate = null;
         this.levelUpdateInterval = 5 * 60 * 1000; // 5 minutes
+
+        this.logger = setupLogger(config.system.logLevel); // <-- Initialize logger
     }
 
     public override on<K extends keyof TradingEngineEvents>(
@@ -67,17 +74,19 @@ export class TradingEngine extends EventEmitter {
 
     public async start(): Promise<void> {
         if (this.isRunning) return;
-        
         try {
+            this.logger.info('Trading engine starting...');
             await this.exchange.initialize();
             await this.loadInitialState();
-            
+
             this.isRunning = true;
             await this.startPriceStream();
             this.scheduleLevelUpdates();
-            
+
+            this.logger.info('Trading engine started.');
             this.emit('started');
         } catch (error) {
+            this.logger.error('Error starting trading engine:', error);
             this.emit('error', error as Error);
             throw error;
         }
@@ -85,34 +94,40 @@ export class TradingEngine extends EventEmitter {
 
     public async stop(): Promise<void> {
         if (!this.isRunning) return;
-        
         try {
+            this.logger.info('Trading engine stopping...');
             this.isRunning = false;
             await this.exchange.stopPriceStream();
             await this.state.save();
-            
+
+            this.logger.info('Trading engine stopped.');
             this.emit('stopped');
         } catch (error) {
+            this.logger.error('Error stopping trading engine:', error);
             this.emit('error', error as Error);
             throw error;
         }
     }
 
     private async loadInitialState(): Promise<void> {
+        this.logger.info('Loading initial trading state...');
         await this.state.load();
         await this.updateLevels();
     }
 
     private async startPriceStream(): Promise<void> {
+        this.logger.info(`Starting price stream for ${this.symbol}...`);
         const handlePrice = async (price: number): Promise<void> => {
             if (!this.isRunning) return;
             await this.handlePriceUpdate(price);
         };
 
         await this.exchange.startPriceStream(this.symbol, handlePrice);
+        this.logger.info('Price stream started.');
     }
 
     private scheduleLevelUpdates(): void {
+        this.logger.info('Scheduling periodic level updates...');
         setInterval(async () => {
             if (!this.isRunning) return;
             await this.updateLevels();
@@ -121,11 +136,14 @@ export class TradingEngine extends EventEmitter {
 
     private async updateLevels(): Promise<void> {
         try {
+            this.logger.info('Analyzing levels...');
             const levels = await this.levelAnalyzer.analyzeLevels(this.symbol);
             this.lastLevelUpdate = DateTime.now();
             this.emit('levelUpdate', levels);
             await this.state.updateLevels(levels);
+            this.logger.info('Levels updated.');
         } catch (error) {
+            this.logger.error('Error updating levels:', error);
             this.emit('error', error as Error);
         }
     }
@@ -134,22 +152,26 @@ export class TradingEngine extends EventEmitter {
         if (!this.isRunning) return;
 
         try {
+            this.logger.debug(`Received price update: ${price}`);
             const currentPosition = this.state.getCurrentPosition();
-            
+
             if (currentPosition) {
                 await this.handleExistingPosition(currentPosition, price);
             } else {
                 await this.checkForNewPosition(price);
             }
         } catch (error) {
+            this.logger.error('Error handling price update:', error);
             this.emit('error', error as Error);
         }
     }
 
     private async handleExistingPosition(position: Position, price: number): Promise<void> {
+        this.logger.debug(`Handling existing position at price ${price}: ${JSON.stringify(position)}`);
         const { shouldClose, reason } = this.positionManager.checkExitConditions(position, price);
-        
+
         if (shouldClose && reason) {
+            this.logger.info(`Exit condition met (${reason}), closing position.`);
             await this.closePosition(reason);
         } else {
             await this.updateTrailingStop(position, price);
@@ -157,21 +179,28 @@ export class TradingEngine extends EventEmitter {
     }
 
     private async checkForNewPosition(price: number): Promise<void> {
-        if (!this.riskManager.canOpenPosition()) return;
+        if (!this.riskManager.canOpenPosition()) {
+            this.logger.debug('Risk manager: cannot open new position at this time.');
+            return;
+        }
 
         const entry = this.positionManager.checkEntryConditions(price, this.state.getLevels());
-        
+
         if (entry) {
+            this.logger.info(`Entry signal detected: ${JSON.stringify(entry)}`);
             await this.openPosition(entry);
         }
     }
 
     private async openPosition(entry: EntrySignal): Promise<void> {
         try {
+            this.logger.info(`Opening new position: ${JSON.stringify(entry)}`);
             const position = await this.positionManager.openPosition(entry);
             await this.state.setCurrentPosition(position);
+            this.logger.info(`Position opened: ${JSON.stringify(position)}`);
             this.emit('positionOpened', position);
         } catch (error) {
+            this.logger.error('Error opening position:', error);
             this.emit('error', error as Error);
         }
     }
@@ -180,23 +209,28 @@ export class TradingEngine extends EventEmitter {
         try {
             const currentPosition = this.state.getCurrentPosition();
             if (!currentPosition) return;
-            
+
+            this.logger.info(`Closing position due to: ${reason}`);
             const result = await this.positionManager.closePosition(currentPosition, reason);
             await this.state.clearCurrentPosition();
+            this.logger.info(`Position closed: ${JSON.stringify(result)}`);
             this.emit('positionClosed', result);
-            
+
             if (result.isLoss) {
+                this.logger.warn('Position closed with a loss. Updating risk manager.');
                 this.riskManager.handleLoss();
             }
         } catch (error) {
+            this.logger.error('Error closing position:', error);
             this.emit('error', error as Error);
         }
     }
 
     private async updateTrailingStop(position: Position, price: number): Promise<void> {
         const newStop = this.positionManager.calculateTrailingStop(position, price);
-        
+
         if (newStop !== position.stopLoss) {
+            this.logger.info(`Updating trailing stop from ${position.stopLoss} to ${newStop}`);
             await this.positionManager.updateStopLoss(newStop);
             this.emit('stopLossUpdated', newStop);
         }
